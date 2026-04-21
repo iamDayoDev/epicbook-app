@@ -1,0 +1,14 @@
+---
+app_dest: /var/www/epicbook
+app_source_dir: "{{ playbook_dir }}/../theepicbook"
+app_user: azureuser
+nginx_port: 80
+backend_host: 127.0.0.1
+backend_port: 8080
+db_name: bookstore
+db_dump_files:
+  - "BuyTheBook_Schema.sql"
+  - "author_seed.sql"
+  - "books_seed.sql"
+app_start_file: "server.js"
+NODE_ENV: "development"

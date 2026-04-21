@@ -1,0 +1,138 @@
+trigger: none
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: infra
+      source: azure-infra-epicbook
+      trigger: true
+
+variables:
+  - group: epicbook-secrets
+  - name: ansibleDir
+    value: ansible
+  - name: vmAdminUser
+    value: azureuser
+  - name: sshKeySecureFile
+    value: id_ed25519
+  - name: sshKeyFileName
+    value: id_ed25519
+
+pool:
+  name: linux_agent_pool
+
+steps:
+  - checkout: self
+    displayName: Checkout repository
+
+  - download: infra
+    artifact: infra-outputs
+    displayName: Download infra outputs artifact
+
+  - bash: |
+      set -euo pipefail
+
+      output_file="$(find "$(Pipeline.Workspace)" -maxdepth 4 -type f -name 'infra-outputs.env' | head -n 1)"
+
+      if [ -z "$output_file" ]; then
+        echo "Could not find infra-outputs.env under $(Pipeline.Workspace)" >&2
+        exit 1
+      fi
+
+      echo "Using Terraform outputs from: $output_file"
+
+      normalized_output="$(mktemp)"
+      trap 'rm -f "$normalized_output"' EXIT
+      tr -d '\r' < "$output_file" > "$normalized_output"
+
+      # shellcheck disable=SC1090
+      source "$normalized_output"
+
+      vm_ip="${vmPublicIp:-${vm_public_ip:-}}"
+      db_endpoint="${db_host:-${dbHost:-}}"
+
+      if [ -z "$vm_ip" ]; then
+        echo "vmPublicIp (or vm_public_ip) was not found in $output_file" >&2
+        exit 1
+      fi
+
+      if [ -z "$db_endpoint" ]; then
+        echo "db_host (or dbHost) was not found in $output_file" >&2
+        exit 1
+      fi
+
+      echo "##vso[task.setvariable variable=vmPublicIp]$vm_ip"
+      echo "##vso[task.setvariable variable=db_host]$db_endpoint"
+
+      echo "Resolved VM public IP: $vm_ip"
+      echo "Resolved database host: $db_endpoint"
+    displayName: Load Terraform outputs
+
+  - task: DownloadSecureFile@1
+    name: sshPrivateKey
+    displayName: Download SSH private key
+    inputs:
+      secureFile: $(sshKeySecureFile)
+
+  - bash: |
+      set -euo pipefail
+      sudo apt-get update
+      sudo apt-get install -y ansible
+      ansible-galaxy collection install community.mysql
+    displayName: Install Ansible dependencies
+
+  - bash: |
+      set -euo pipefail
+      mkdir -p "$HOME/.ssh"
+      install -m 600 "$(sshPrivateKey.secureFilePath)" "$HOME/.ssh/$(sshKeyFileName)"
+      ls -l "$HOME/.ssh"
+    displayName: Prepare SSH private key
+
+  - bash: |
+      set -euo pipefail
+
+      cat > "$(Build.SourcesDirectory)/$(ansibleDir)/inventory.ini" <<EOF
+      [web]
+      $(vmPublicIp)
+
+      [web:vars]
+      ansible_user=$(vmAdminUser)
+      ansible_connection=ssh
+      ansible_ssh_private_key_file=$HOME/.ssh/$(sshKeyFileName)
+      ansible_ssh_common_args='-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+      ansible_python_interpreter=/usr/bin/python3
+      EOF
+
+      cat "$(Build.SourcesDirectory)/$(ansibleDir)/inventory.ini"
+    displayName: Generate Ansible inventory
+
+  - bash: |
+      set -euo pipefail
+
+      cat > deployment-vars.yml <<EOF
+      db_host: "$(db_host)"
+      db_user: "$(db_user)"
+      db_password: "$(db_password)"
+      server_name: "$(vmPublicIp)"
+      EOF
+    workingDirectory: $(Build.SourcesDirectory)/$(ansibleDir)
+    displayName: Build Ansible extra vars
+
+  - bash: |
+      set -euo pipefail
+      ansible all -m ping
+    workingDirectory: $(Build.SourcesDirectory)/$(ansibleDir)
+    displayName: Test Ansible connectivity
+
+  - bash: |
+      set -euo pipefail
+      ansible-playbook site.yml --extra-vars @deployment-vars.yml
+    workingDirectory: $(Build.SourcesDirectory)/$(ansibleDir)
+    displayName: Run Ansible playbook
+
+  - bash: |
+      set -euo pipefail
+      echo "Application URL: http://$(vmPublicIp)"
+      curl -fsS -I --max-time 20 "http://$(vmPublicIp)"
+      curl -fsS --max-time 20 "http://$(vmPublicIp)" | head -n 20
+    displayName: Verify deployment URL and Nginx
