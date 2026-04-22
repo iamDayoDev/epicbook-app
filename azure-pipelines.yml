@@ -28,14 +28,21 @@ steps:
       echo "Downloaded artifact contents:"
       ls -R "$(Pipeline.Workspace)"
 
+      echo "---- infra-outputs.env ----"
+      cat "$(Pipeline.Workspace)/infra/infra-outputs/infra-outputs.env"
+      echo "---------------------------"
+
       source "$(Pipeline.Workspace)/infra/infra-outputs/infra-outputs.env"
+
+      echo "Loaded vmPublicIp='$vmPublicIp'"
+      echo "Loaded db_host='$db_host'"
 
       echo "##vso[task.setvariable variable=vmPublicIp]$vmPublicIp"
       echo "##vso[task.setvariable variable=db_host]$db_host"
 
       echo "VM IP: $vmPublicIp"
       echo "DB Host: $db_host"
-    displayName: 'Load infra outputs'
+    displayName: Load infra outputs
 
   - task: DownloadSecureFile@1
     name: sshPrivateKey
