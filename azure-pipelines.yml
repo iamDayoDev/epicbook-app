@@ -72,7 +72,7 @@ steps:
     name: sshPrivateKey
     displayName: Download SSH private key
     inputs:
-      secureFile: $(sshKeySecureFile)
+      secureFile: "$(sshKeySecureFile)"
 
   - bash: |
       set -euo pipefail
@@ -125,8 +125,8 @@ steps:
     displayName: Test Ansible connectivity
 
   - bash: |
-      set -euo pipefail
-      ansible-playbook site.yml --extra-vars @deployment-vars.yml
+     ansible -i inventory.ini all -m ping
+     ansible-playbook -i inventory.ini site.yml --extra-vars @deployment-vars.yml
     workingDirectory: $(Build.SourcesDirectory)/$(ansibleDir)
     displayName: Run Ansible playbook
 
